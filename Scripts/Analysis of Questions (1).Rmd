@@ -1,0 +1,264 @@
+---
+title: "Analysis of Questions"
+author: "Data Decoders"
+date: "2025-04-14"
+output: html_document
+---
+#Required Libraries
+```{r}
+library(tidyverse)
+library(ggplot2)
+
+```
+
+
+#Loading Data
+```{r}
+data <- read_csv("../data/Paralympic.csv")
+
+head(data)
+```
+
+
+# Exploring Data
+```{r}
+str(data)
+```
+
+
+```{r}
+summary(data)
+```
+#Convert colnames to consistent format
+```{r}
+colnames(data) <- make.names(colnames(data))
+```
+
+
+# Checking for duplicates in the data
+```{r}
+duplicates <- data[duplicated(data), ]
+print(nrow(duplicates))
+```
+There are no duplicates in the data.
+
+
+# Checking missing values
+```{r}
+missing_vals <- colSums(is.na(data))
+missing_vals
+```
+There are missing values in the data.
+
+
+#Checking columns that have missing values
+```{r}
+missing_colnames <- names(data)[colSums(is.na(data)) > 0]
+missing_colnames
+```
+
+
+#Calculate Total Missing Values Percentage
+```{r}
+missing_perc <- (sum(is.na(data))/(nrow(data) * ncol(data))) * 100
+missing_perc
+```
+
+
+There is an around 2% of null values in the entire data. We can drop the null values as they are <10% of the entire data.
+
+
+#Removing Null values from the data
+```{r}
+data <- data[complete.cases(data), ]
+```
+
+
+#Checking if the null values are removed or not
+```{r}
+sum(colSums(is.na(data)))
+```
+
+
+#Numeric Columns
+```{r}
+num_cols <- names(data)[sapply(data, is.numeric)]
+```
+
+
+#Identify Outliers
+```{r}
+outliers <- list()
+for(col in names(data[, num_cols])) {
+  Q1 <- quantile(data[col], 0.25, na.rm = TRUE)
+  Q3 <- quantile(data[col], 0.75, na.rm = TRUE)
+  IQR <- Q3 - Q1
+  lower_bound <- Q1 - 1.5 * IQR
+  upper_bound <- Q3 + 1.5 * IQR
+  outliers[[col]] <- data[data[[col]] < lower_bound | data[[col]] > upper_bound, ]
+  }
+
+outliers
+```
+
+# Visualising Outliers
+```{r}
+for (col in names(data[, num_cols])) {
+  print(ggplot(data, aes_string(y = col)) +
+          geom_boxplot() +
+          theme_minimal() +
+          labs(title = paste("Boxplot of", col)))
+}
+```
+
+
+#Robust Scaling for outliers
+```{r}
+winsorize <- function(x, lower = 0.05, upper = 0.95) {
+  qnt <- quantile(x, probs = c(lower, upper), na.rm = TRUE)
+  x[x < qnt[1]] <- qnt[1]  # Cap lower outliers
+  x[x > qnt[2]] <- qnt[2]  # Cap upper outliers
+  return(x)
+}
+
+data[] <- lapply(data, function(x) if(is.numeric(x)) winsorize(x) else x)
+```
+
+# Visualising Outliers
+```{r}
+for (col in names(data[, num_cols])) {
+  print(ggplot(data, aes(y = col)) +
+          geom_boxplot() +
+          theme_minimal() +
+          labs(title = paste("Boxplot of", col)))
+}
+```
+
+#Total Medals
+
+```{r}
+data <- data %>%
+  mutate(total_medals = npc_gold + npc_silver + npc_bronze)
+```
+
+
+# Medals by Type Across Games for Top 10 NPCs
+
+```{r}
+summer_data <- data %>%
+  filter(games_season == "Summer")
+
+Prev_5yrs_data <- summer_data %>%
+  distinct(games_year) %>%
+  arrange(desc(games_year)) %>%
+  slice_head(n = 5) %>%
+  pull(games_year)
+
+Prev_5yrs_summer_data <- summer_data %>%
+  filter(games_year %in% Prev_5yrs_data)
+
+Top_NPCs <- Prev_5yrs_summer_data %>%
+  group_by(npc_new) %>%
+  summarise(total = sum(total_medals, na.rm = TRUE)) %>%
+  arrange(desc(total)) %>%
+  slice_head(n = 10) %>%
+  pull(npc_new)
+
+trend_of_medals_Top_10_NPCs_data <- Prev_5yrs_summer_data %>%
+filter(npc_new %in% Top_NPCs) %>%
+  group_by(npc_new, games_year) %>%
+  summarise(total_medals = sum(total_medals, na.rm = TRUE), .groups = "drop")
+```
+
+## Line Chart for the Trend over years
+```{r}
+ggplot(trend_of_medals_Top_10_NPCs_data, aes(x = games_year,
+                                             y = total_medals,
+                                             color = npc_new)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 3) +
+  labs(title = "Trends of Medals for Top 10 NPCs over last 5 Summer Games",
+       color = "Country",
+       x = "Game Year",
+       y = "Total Medals") +
+  theme_minimal()
+```
+
+```{r}
+Medal_by_Type <- summer_data %>%
+  filter(npc_new %in% Top_NPCs) %>%
+  filter(games_year %in% Prev_5yrs_data) %>%
+  select(games_year, npc_new, npc_gold, npc_silver, npc_bronze) %>%
+  pivot_longer(cols = c(npc_gold, npc_silver, npc_bronze),
+               names_to = "Medal_Type",
+               values_to = "Count") %>%
+  mutate(Medal_Type = recode(Medal_Type,
+                             npc_gold = "Gold",
+                             npc_silver = "Silver",
+                             npc_bronze = "Bronze"))
+```
+
+
+## Stacked Bar Plot for Medals by Type across games for Top 10 NPCs
+```{r}
+ggplot(Medal_by_Type, aes(x = factor(games_year),
+                          y = Count,
+                          fill = Medal_Type)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~npc_new) +
+  labs(title = "Medal Composition for Top 10 NPCs",
+       x = "Games Year",
+       y = "Medal Count",
+       fill = "Medal Type") +
+  theme_minimal()
+```
+
+```{r}
+masochism_sports <- c("Athletics", "Swimming", "Powerlifting", "Cycling")
+
+sports_dom <- data %>%
+  filter(sport %in% masochism_sports) %>%
+  filter(total_medals > 0) %>%
+  mutate(Region = case_when(npc_new %in% c("USA", "BRA", "CAN") ~ "America",
+                            npc_new %in% c("CHN", "JPN", "KOR") ~ "Asia",
+                            npc_new %in% c("GBR", "FRA", "GER", "ITA") ~ "Europe",
+                            TRUE ~ "Other"))
+```
+
+
+## Sport Participation by region
+```{r}
+region_sport_yr <- sports_dom %>%
+  group_by(games_year, Region, sport) %>%
+  summarise(Count = n(), .groups = "drop")
+
+ggplot(region_sport_yr, aes(x = games_year,
+                            y = Count,
+                            fill = sport)) +
+  geom_area() +
+  facet_wrap(~Region) +
+  labs(title = "Participation in High-Endurance Sports by Region",
+       x = "Games Year",
+       y = "Participation Count",
+       fill = "High Endurance Sport") +
+  theme_minimal()
+```
+
+
+## Sport and Region vs Total Medals
+```{r}
+bubble_data <- sports_dom %>%
+  group_by(sport, Region) %>%
+  summarise(medal_Count = sum(total_medals, na.rm = TRUE), .groups = "drop")
+
+ggplot(bubble_data, aes(x = sport, y = Region,
+                        size = medal_Count,
+                        color = Region)) +
+  geom_point(alpha = 0.7) +
+  labs(title = "Sport Domination by Region",
+       x = "Sport",
+       y = "Region",
+       size = "Medal Count",
+       color = "Region") +
+  theme_minimal()
+```
